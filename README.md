@@ -2,22 +2,39 @@
 
 ## Quick Start
 ### (Preliminary) Populate Results 
-From MAGNET, generate `results.json` by evaluating each card you would like to visualize. For example, you can use the `evaluate` command on our simple example card:
+From MAGNET, generate output artifacts by evaluating each card you would like to visualize. For example, you can use the `evaluate` command on our simple example card:
 ```
 magnet evaluate magnet/cards/simple.yaml
 ```
-The evaluation will automatically generate the directory structure below, creating a random card id for each `evaluate` call. 
+The evaluation will automatically generate the directory structure below, creating a `card_hash` and `timestamp` for each `evaluate` call. 
 ```
-magnet/cards/
-├── evaluations
-│   └── {card.id}
-│       └── results.json
-└── simple.yaml
+./evaluation_runs
+└── {card_hash}_{timestamp}
+    ├── card.yaml
+    |── results
+    │   ├── {symbols_hash}
+    │   │   └── verdict.json
+    └── verdict.json                
 ```
-This visualization app expects a path argument such as `'magnet/cards/evaluation'` to a directory of card ids with `results.json` contents. 
+Then, copy this output to a double nested directory structure such as that in the [example results repo](https://github.com/AIQ-Kitware/evaluations-example/).
+
+The results should look like this:
+```
+├── SelfEvaluations
+│   ├── Test
+│   │   └── evaluation_runs
+│   │       └── {card_hash}_{timestamp}
+│   │           ├── card.yaml
+│   │           ├── verdict.json
+│   │           └── results
+│   └── ...
+└── ...
+```
+
+This visualization app expects a path argument that points to the root of this structure and contains all required artifacts: `/results`, `verdict.json`, and `card.yaml`.
 
 ### Install dependencies
-This is an intentionally lightweight visualization tool will minimal dependencies. 
+This is an intentionally lightweight visualization tool with minimal dependencies. 
 ```bash
 uv venv --python 3.11 --seed .venv-311-evalcard-viz
 source .venv-311-evalcard-viz/bin/activate
@@ -28,7 +45,7 @@ Alternatively, you can extend your existing MAGNET environment by installing `tr
 ### Running the App
 With results and environment ready, you can start the trame app and visualize your card runs.
 ```
-python visualization.py ../aiq-magnet/magnet/cards/evaluations
+python visualization.py ../evaluations-example/
 ```
 
 ## App Features
@@ -38,7 +55,8 @@ The visualization app intentionally populates a library of cards that can be sel
 ![Dashboard View](assets/dashboard.png)
 A short catalog entry displays the title, description, category, number of sweeps/runs, and verfication rate. The focused view displays the raw python claim being resolved as well as all of the parameter sweep results.
 
-Note: For this version, you may assume 100% Pass cards contain a VERIFIED claim, whereas others have been FALSIFIED. 
+<!-- Note: For this version, you may assume 100% Pass cards contain a VERIFIED claim, whereas others have been FALSIFIED. 
+-->
 
 ### Search for cards
 There are three fields available to search for particular cards: title, category, and result.

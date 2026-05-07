@@ -1,6 +1,7 @@
 import argparse
 import ubelt as ub
 import json
+import yaml
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as v3, html
@@ -8,11 +9,11 @@ from trame.decorators import TrameApp, change
 
 @TrameApp()
 class EvaluationCardsApp:
-    def __init__(self, path=None, server=None):
+    def __init__(self, path, server=None):
         self.server = get_server(server, client_type="vue3")
         self.state, self.ctrl = self.server.state, self.server.controller
         
-        # Initialize state
+        # Initialize dashboard state
         self.state.cards = []
         self.state.filtered_cards = []
         self.state.selected_card = None
@@ -23,41 +24,112 @@ class EvaluationCardsApp:
         
         # Collect Cards
         self.state.cards = self.find_eval_card_data(path)
-        self.state.filtered_cards = self.find_eval_card_data(path)
+        self.state.filtered_cards = self.state.cards.copy()
 
         # Initialize card dependent fields
-        categories = set(c["category"] for c in self.state.cards)
+        categories = set(c['card']["category"] for c in self.state.cards)
         self.state.categories = ["All"] + sorted(list(categories))
 
         results = set(c["result"] for c in self.state.cards)
         self.state.results = ["All"] + sorted(list(results))
+
+        # TODO: Add additional fields as Evaluation Cards become more defined
         
+        # Initialize Symbol view toggle map
         self.state.symbols_expanded = {c['id']: {r['id']: True} for c in self.state.cards for r in c['runs']}
 
         self._build_ui()
     
-    def find_eval_card_data(self, path="./magnet/cards/evaluations/"):
+    def find_eval_card_data(self, root_path="./evaluations-example/"):
         """
-        Parse local and suggested algorithm format for run data
+        --------------
+        Parse suggested algorithm format for run data to build dashboard data structure
 
         Currently assumes the following structure:
-        /evaluations
-          /card.id
-            -results.json
+
+        /PhaseI_DryRun                                  # Milestone name
+        └── JHU                                         # Organization
+            └── DKPS_PerInstance_Prediction             # Algorithm/approach name
+                └── ac0068cf_2026-04-09__15-42-59       # {card_hash}_{timestamp} for each unique card
+                    ├── card.yaml                       # Original evalution card YAML definition
+                    ├── results         
+                    │   └── f2af6eb66e70                # One subdirectory for each parameter set in the sweep
+                    │       └── verdict.json            # Claim result for this parameter set
+                    └── verdict.json                    # Aggregate result over all claims
+
         """
-        # TODO: replace with TA1 suggested formatting
-        
-        evaluation_dir = ub.Path(path)
+        # TODO: Sync with examples repo as default (no path provided)
+        # TODO: Allow less rigid directory structures, such as TA1 cookiecutter repo format
+        # TODO: Make strict parsing rules
+        # TODO: Collapse cards by contents hash and display latest by default
+        # TODO: Possibly use MAGNET (e.g. EvaluationCard object) to avoid static parsing
+        # TODO: ^ or expose remaining fields
 
-        results = []
+        evaluations_dir = ub.Path(root_path)
 
-        for card in evaluation_dir.iterdir():
-            if card.is_dir():
-                results_file = card / 'results.json'
-                if results_file.exists():
-                    results.append(json.loads(results_file.read_text()))
+        dashboard_contents = []
 
-        return results
+        for milestone_dir in evaluations_dir.iterdir():
+            if not milestone_dir.is_dir():
+                continue
+            for organization_dir in milestone_dir.iterdir():
+                if not organization_dir.is_dir():
+                    continue
+                for algorithm_dir in organization_dir.iterdir():
+                    if not algorithm_dir.is_dir():
+                        continue
+                    for card_run in algorithm_dir.iterdir():
+                        if not card_run.is_dir():
+                            continue
+                        
+                        card_run_details = []
+
+                        card = None
+                        claim = None
+                        verdict = "VERIFIED"
+
+                        # Parse results
+                        if (card_run / 'results').exists():
+                            for sweep_dir in (card_run / 'results').iterdir():
+                                result = json.loads((sweep_dir / 'verdict.json').read_text())
+                                if verdict == "VERIFIED":
+                                    verdict = result['status']
+                                    # TODO: verify this behavior
+                                result['id'] = sweep_dir.name
+                                card_run_details.append(result)
+                        else:
+                            print(f'No results directory found in {card_run}')
+                            continue
+                        
+                        # Parse card
+                        if (card_run / 'card.yaml').exists():
+                            with open((card_run / 'card.yaml'), 'r') as f:
+                                card = yaml.safe_load(f)
+                                claim_raw = card.get('claim')['python']
+                                split_claim = claim_raw.split(',')
+                                # TODO: replace claim with natural language description and hide with code or math button
+                                claim = "".join(split_claim[:-1]) if len(split_claim) > 1 else split_claim[0]
+                                card['category'] = "Model Generalization" # FIXME: hardcoded
+                        else:
+                            print(f'No card definition found in {card_run}')
+                            continue 
+
+                        # Parse verdict
+                        if (card_run / 'verdict.json').exists():
+                            with open((card_run / 'verdict.json'), 'r') as f:
+                                verdict_log = json.load(f)
+                                verdict = verdict_log['result']
+                                agg_strat = verdict_log['claim_aggregation_strategy']
+                        else:
+                            print(f'No verdict found in {card_run}')
+                            continue
+
+                        result_data = {'milestone': milestone_dir.name, 'organization': organization_dir.name, 'algorithm': algorithm_dir.name, 'claim_aggregation_strategy': agg_strat, 'card': card, 'claim': claim, 'result': verdict, 'runs': card_run_details}
+                        result_data['id'], result_data['date'] = card_run.name.split('_')[0], "".join(card_run.name.split('_')[1:]) 
+                        # FIXME: ^this may override same hash cards? for better or worse
+                        dashboard_contents.append(result_data)
+
+        return dashboard_contents
     
     def filter_cards(self, cards, search_term, category, result):
         """
@@ -69,11 +141,11 @@ class EvaluationCardsApp:
             search_lower = search_term.lower()
             filtered = [
                 c for c in filtered 
-                if search_lower in c["title"].lower() or search_lower in c["description"].lower()
+                if search_lower in c["title"].lower() or search_lower in c['card']["description"].lower()
             ]
         
         if category != "All":
-            filtered = [c for c in filtered if c["category"] == category]
+            filtered = [c for c in filtered if c['card']["category"] == category]
         
         if result != "All":
             filtered = [c for c in filtered if c["result"] == result]
@@ -102,6 +174,9 @@ class EvaluationCardsApp:
         self.state.runs_expanded = not self.state.runs_expanded
     
     def _build_ui(self):
+        """
+        Dashboard construction
+        """
         with SinglePageLayout(self.server) as layout:
             layout.title.set_text("MAGNET Visualization - Evaluation Cards Gallery")
             
@@ -182,7 +257,7 @@ class EvaluationCardsApp:
         ):
             with v3.VCardText():
                 with html.Div(classes="d-flex justify-space-between align-start mb-2"):
-                    html.Div("{{ card.title }}", classes="text-subtitle-2 font-weight-bold")
+                    html.Div("{{ card.card.title }}", classes="text-subtitle-2 font-weight-bold")
                     with self._pass_rate_button_context():
                         html.Div("{{ card.runs ? Math.round(card.runs.filter(r => r.status === 'VERIFIED').length / card.runs.length * 100) : 0 }}% Pass")
                 
@@ -191,18 +266,27 @@ class EvaluationCardsApp:
                        style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;")
                 
                 with html.Div(classes="d-flex justify-space-between align-center"):
-                    v3.VChip("{{ card.category }}", size="small", variant="tonal", color="primary")
+                    v3.VChip("{{ card.card.category }}", size="small", variant="tonal", color="primary")
+                    #v3.VChip("{{ card.milestone}}", size="small", variant="tonal", color="primary")
+                    #v3.VChip("{{ card.organization}}", size="small", variant="tonal", color="primary")
                     html.Span("{{ card.runs ? card.runs.length : 0 }} runs", 
                               classes="text-caption text-grey")
-    
+                    
+            
     def _render_card_detail(self):
         with v3.VCard(variant="outlined"):
             # Header
             with v3.VCardTitle(classes="pa-6 bg-grey-lighten-4"):
                 with html.Div(classes="d-flex justify-space-between align-start"):
                     with html.Div(classes="flex-grow-1"):
-                        html.H2("{{ selected_card.title }}", classes="text-h4 mb-2")
-                        html.P("{{ selected_card.description }}", classes="text-body-2 text-grey-darken-2 text-wrap")
+                        html.H2("{{ selected_card.card.title }}", classes="text-h4 mb-2")
+                        html.P("{{ selected_card.card.description }}", classes="text-body-2 text-grey-darken-2 text-wrap")
+                        # TODO: Possible resource tagging solution
+                        # html.A(
+                        #    html.Img(src="https://img.shields.io/badge/GitHub-Repo-black?logo=github"),
+                        #    href="https://github.com",
+                        #    target="_blank",
+                        #)
                     with html.Div(classes="d-flex align-start ms-4", style="white-space: nowrap;"):
                         with v3.VChip(
                             v_bind_color=(
@@ -216,11 +300,21 @@ class EvaluationCardsApp:
                             html.Div(
                                 "{{ selected_card.runs ? Math.round(selected_card.runs.filter(r => r.status === 'VERIFIED').length / selected_card.runs.length * 100) : 0 }}% Pass"
                             )
-                v3.VChip("{{ selected_card.category }}", 
+                v3.VChip("{{ selected_card.card.category }}", 
                          color="primary", 
                          variant="tonal",
                          size="small",
                          classes="mt-2")
+                '''v3.VChip("{{ selected_card.milestone }}", 
+                         color="primary", 
+                         variant="tonal",
+                         size="small",
+                         classes="mt-2")
+                v3.VChip("{{ selected_card.organization }}", 
+                         color="primary", 
+                         variant="tonal",
+                         size="small",
+                         classes="mt-2")'''
             
             v3.VDivider()
 
@@ -357,4 +451,4 @@ if __name__ == "__main__":
                         help="Path to evaluation card results directory")
     args = parser.parse_args()
     app = EvaluationCardsApp(args.path)
-    app.start()
+    app.start(port=7860, host="0.0.0.0")
