@@ -40,32 +40,32 @@ uv venv --python 3.11 --seed .venv-311-evalcard-viz
 source .venv-311-evalcard-viz/bin/activate
 uv pip install .
 ```
-Alternatively, you can extend your existing MAGNET environment by installing `trame` and `trame-vuetify`.
-
 ### Running the App
 With results and environment ready, you can start the trame app and visualize your card runs.
 ```
 python visualization.py ../evaluations-example/
 ```
+### Adding data
+While running the app (initialized with data or not), you may upload your own compressed local results using the button in the top right corner of the dashboard. The only accepted format is a zip of the native `magnet` output (e.g. `./evaluation_runs` above) with all expected components (`card.yaml`, `verdict.json`, `/results`). 
 
 ## App Features
 
 ### Dashboard
-The visualization app intentionally populates a library of cards that can be selected to render on the right-side focused view.
+The visualization app populates a library of cards that can be selected to render on the right-side focused view.
 ![Dashboard View](assets/dashboard.png)
-A short catalog entry displays the title, description, category, number of sweeps/runs, and verfication rate. The focused view displays the raw python claim being resolved as well as all of the parameter sweep results.
+A short catalog entry displays the title, description, submitter organization, submission milestone, algorithm, number of sweeps/runs, and verification rate. The focused view displays a markdown description of the card that can be toggled to show the raw python claim and aggregation strateg as well as parameter sweep results and logs.
 
-<!-- Note: For this version, you may assume 100% Pass cards contain a VERIFIED claim, whereas others have been FALSIFIED. 
+<!-- Note: For this version, you may assume 100% Pass cards contain a VERIFIED claim, otherwise if the assertion banner rate is greater than the pass rate then the result is FALSIFIED. 
 -->
 
 ### Search for cards
-There are three fields available to search for particular cards: title, category, and result.
+There are three fields available to search for particular cards: title, tags, and result.
 
-As shown below, the Llama example card can be found by searching for its title in plain-text. However, the category and result fields could further narrow down particular evaluated claims. 
+As shown below, the Llama example card can be found by searching for its title in plain-text. However, the category and result fields could further narrow down particular cards. 
 ![Search](assets/search.png)
 
 ### Hide Details
-Runs and symbols are both collapsable headings. You may click directly on 'Runs (X)' to hide all sweeps. Similarly, you may select the brackets icon next to 'Symbols' to hide the symbol-value pairs for all sweeps.
+Runs and symbols are both collapsable headings. You may click directly on 'Runs (X)' to hide all sweeps. Conversely, you may select the icon next to 'Symbols' to expose the symbol-value pairs for that sweep.
 
 Using a falsified sweep for example,
 ![Llama Falsified Run](assets/falsified_sweep.png)
