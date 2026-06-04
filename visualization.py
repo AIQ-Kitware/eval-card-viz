@@ -1,7 +1,10 @@
 import argparse
+import io
+import tempfile
 import ubelt as ub
 import json
 import yaml
+import zipfile
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as v3, html
@@ -23,6 +26,9 @@ class EvaluationCardsApp:
         self.state.runs_expanded = True
         self.state.show_python_claim = False
         self.state.current_tab = "runs"
+        self.state.upload_show = False
+        self.state.upload_msg = ""
+        self.state.upload_color = "success"
 
         self.state.expanded_symbols_runs = []
 
@@ -96,7 +102,6 @@ class EvaluationCardsApp:
         # TODO: Make strict parsing rules
         # TODO: Collapse cards by contents hash and display latest by default
         # TODO: Possibly use MAGNET (e.g. EvaluationCard object) to avoid static parsing
-        
         evaluations_dir = ub.Path(root_path)
 
         dashboard_contents = []
@@ -230,6 +235,169 @@ class EvaluationCardsApp:
             if not is_still_visible:
                 self.state.selected_card = None
 
+    def find_upload_data(self, root_path="./evaluation_runs/"):
+        """
+        --------------
+        Parse MAGNET output format
+
+        Currently assumes the following structure:
+
+        /ac0068cf_2026-04-09__15-42-59                  # {card_hash}_{timestamp} for each unique card
+        ├── card.yaml                                   # Original evalution card YAML definition
+        ├── log                                         # Console dump
+        ├── results
+        │   └── f2af6eb66e70                            # One subdirectory for each parameter set in the sweep
+        │       └── verdict.json                        # Claim result for this parameter set
+        └── verdict.json                                # Aggregate result over all claims
+
+        """
+
+        card_run = ub.Path(root_path)
+
+        dashboard_contents = []
+
+        milestone = "SelfEvaluation"
+        organization = "Local"
+
+        for card_run in card_run.iterdir():
+            if not card_run.is_dir():
+                continue
+            card_run_details = []
+
+            card = None
+            claim = None
+            verdict = "VERIFIED"
+
+            # Parse results
+            if (card_run / "results").exists():
+                for sweep_dir in (card_run / "results").iterdir():
+                    result = json.loads(
+                        (sweep_dir / "verdict.json").read_text()
+                    )
+                    if verdict == "VERIFIED":
+                        verdict = result["status"]
+                    result["id"] = sweep_dir.name
+                    card_run_details.append(result)
+                card_run_details.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+            else:
+                print(f"No results directory found in {card_run}")
+                continue
+
+            # Parse card
+            if (card_run / "card.yaml").exists():
+                with open((card_run / "card.yaml"), "r") as f:
+                    card = yaml.safe_load(f)
+                    claim_raw = card.get("claim")["python"]
+                    split_claim = claim_raw.split(",")
+                    claim = (
+                        "".join(split_claim[:-1])
+                        if len(split_claim) > 1
+                        else split_claim[0]
+                    )
+            else:
+                print(f"No card definition found in {card_run}")
+                continue
+
+            # Parse verdict
+            if (card_run / "verdict.json").exists():
+                with open((card_run / "verdict.json"), "r") as f:
+                    verdict_log = json.load(f)
+                    verdict = verdict_log["result"]
+                    agg_strat = verdict_log["claim_aggregation_strategy"]
+            else:
+                print(f"No verdict found in {card_run}")
+                continue
+
+            # Parse log
+            log_text = "No log file found."
+            if (card_run / "log").exists():
+                with open((card_run / "log"), "r") as f:
+                    log_text = f.read()
+
+            result_data = {
+                "milestone": milestone,
+                "organization": organization,
+                "algorithm": card['title'].replace(" ", "_"),
+                "claim_aggregation_strategy": agg_strat,
+                "card": card,
+                "claim": claim,
+                "result": verdict,
+                "runs": card_run_details,
+                "log": log_text,
+            }
+            result_data["id"], result_data["date"] = (
+                card_run.name.split("_")[0],
+                "".join(card_run.name.split("_")[1:]),
+            )
+            dashboard_contents.append(result_data)
+
+        return dashboard_contents
+
+    @change("uploaded_file")
+    def handle_file_upload(self, uploaded_file, **kwargs):
+        if not uploaded_file:
+            return  # Triggered when the user clears the input
+
+        try:
+            # 1. Trame provides the file contents as bytes
+            file_bytes = uploaded_file.get("content")
+            
+            # 2. Create a temporary directory that auto-cleans up
+            with tempfile.TemporaryDirectory() as temp_dir:
+                
+                # 3. Extract the ZIP in memory to the temp directory
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as zip_ref:
+                    zip_ref.extractall(temp_dir)
+                
+                # 4. Parse contents
+                new_cards = self.find_upload_data(temp_dir)
+                
+                if new_cards:
+                    self.state.cards = self.state.cards + new_cards
+                    
+                    # 6. Re-trigger the filter to show the new cards immediately
+                    self.state.filtered_cards = self.filter_cards(
+                        self.state.cards, 
+                        self.state.search_term, 
+                        self.state.result_filter, 
+                        self.state.selected_tags
+                    )
+                    
+                    # Refresh available tags in the dropdown
+                    new_tags = set()
+                    for c in new_cards:
+                        new_tags.update(c["card"].get("tags", []))
+
+                    unique_orgs = set(c["organization"] for c in new_cards)
+                    unique_phases = set(c["milestone"] for c in new_cards)
+                    unique_algos = set(c["algorithm"] for c in new_cards)
+                    
+                    new_tags.update(unique_orgs)
+                    new_tags.update(unique_phases)
+                    new_tags.update(unique_algos)
+
+                    new_tags.update(self.state.available_tags)
+                
+                    self.state.available_tags = sorted(list(new_tags))
+                    results = set(c["result"] for c in new_cards)
+                    results.update(self.state.results)
+                    self.state.results = ["All"] + sorted(list(results))
+                    self.state.upload_msg = f"Success: Loaded {len(new_cards)} evaluation card(s)."
+                    self.state.upload_color = "success"
+                    self.state.upload_show = True
+
+                else:
+                    self.state.upload_msg = "No valid evaluation cards found in the zip."
+                    self.state.upload_color = "warning"
+                    self.state.upload_show = True
+
+        except Exception as e:
+            self.state.upload_msg = f"Upload failed: {e}"
+            self.state.upload_color = "error"
+            self.state.upload_show = True
+        finally:
+            self.state.uploaded_file = None
+
     def select_card(self, card_id):
         card = next((c for c in self.state.cards if c["id"] == card_id), None)
         self.state.selected_card = card
@@ -268,6 +436,21 @@ class EvaluationCardsApp:
         """
         with SinglePageLayout(self.server) as layout:
             layout.title.set_text("MAGNET Visualization - Evaluation Cards Gallery")
+
+            with layout.toolbar:
+                v3.VSpacer() # Pushes the input to the far right
+                v3.VFileInput(
+                    v_model=("uploaded_file", None),
+                    accept=".zip",
+                    label="Upload Local Run (.zip)",
+                    prepend_icon="mdi-folder-zip-outline",
+                    variant="solo-filled",
+                    density="compact",
+                    hide_details=True,
+                    clearable=True,
+                    flat=True,
+                    style="max-width: 300px;" 
+                )
 
             with layout.content:
                 with v3.VContainer(fluid=True, classes="pa-6"):
@@ -342,6 +525,19 @@ class EvaluationCardsApp:
                                     "Select a card to view details",
                                     classes="text-h6 text-grey",
                                 )
+                with v3.VSnackbar(
+                    v_model=("upload_show",),
+                    timeout=4000,
+                    color=("upload_color",),
+                    location="bottom right",
+                ):
+                    html.Span("{{ upload_msg }}", classes="text-body-1 font-weight-medium")
+                    with v3.VBtn(
+                        color="white", 
+                        variant="text", 
+                        click="upload_show = False"
+                    ):
+                        html.Span("Close")
 
     def _pass_rate_button_context(self):
         return v3.VChip(
@@ -539,7 +735,6 @@ class EvaluationCardsApp:
                             v3.VIcon("{{ show_python_claim ? 'mdi-text' : 'mdi-code-braces' }}", size="large")
 
                     # 1. Theory View (Markdown)
-                    # 1. Theory View (Markdown)
                     with html.Div(
                         v_show="!show_python_claim", 
                         classes="text-body-1 text-grey-darken-3", 
@@ -550,7 +745,6 @@ class EvaluationCardsApp:
                         # Note: Depending on your specific trame-markdown version, the prop is usually 'content' or 'source'
                         markdown.Markdown(content=("selected_card.card.description",))
 
-                    # 2. Python Code View
                     # 2. Python Code View
                     with html.Div(v_show="show_python_claim"):
                         v3.VDivider(classes="mb-4", color="primary")
