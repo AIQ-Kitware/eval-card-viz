@@ -381,7 +381,7 @@ class EvaluationCardsApp:
                     self.state.available_tags = sorted(list(new_tags))
                     results = set(c["result"] for c in new_cards)
                     results.update(self.state.results)
-                    self.state.results = ["All"] + sorted(list(results))
+                    self.state.results = sorted(list(results))
                     self.state.upload_msg = f"Success: Loaded {len(new_cards)} evaluation card(s)."
                     self.state.upload_color = "success"
                     self.state.upload_show = True
