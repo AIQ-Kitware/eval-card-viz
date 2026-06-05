@@ -204,12 +204,7 @@ class EvaluationCardsApp:
             filtered = [
                 c
                 for c in filtered
-                if search_lower in c["card"]["title"].lower()
-            ]
-            filtered = [
-                c
-                for c in filtered
-                if "description" in c["card"] and search_lower in c["card"]["description"].lower()
+                if search_lower in c["card"]["title"].lower() or ("description" in c["card"] and search_lower in c["card"]["description"].lower())
             ]
 
         if result != "All":
