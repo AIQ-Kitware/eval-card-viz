@@ -9,4 +9,4 @@ WORKDIR /app
 COPY --chown=user . /app
 RUN pip install --no-cache-dir uv && \
     uv sync
-CMD ["python", "app.py", "./evaluations"]
+CMD ["uv", "run", "python", "visualization.py", "./evaluations"]
