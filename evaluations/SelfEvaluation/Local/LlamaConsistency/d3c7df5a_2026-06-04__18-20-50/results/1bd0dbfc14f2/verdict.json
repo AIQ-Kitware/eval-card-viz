@@ -1,0 +1,13 @@
+{
+  "status": "VERIFIED",
+  "output": "Assertion holds",
+  "symbols": {
+    "threshold": 0.1,
+    "base_model": "meta/llama-3-8b",
+    "base_score": 0.6015087719298247,
+    "comp_model": "meta/llama-3-8b",
+    "comp_score": 0.6015087719298247,
+    "helm_runs_path": "./old-data/crfm-helm-public/lite/benchmark_output"
+  },
+  "timestamp": "2026-06-04T18:20:53.660644"
+}

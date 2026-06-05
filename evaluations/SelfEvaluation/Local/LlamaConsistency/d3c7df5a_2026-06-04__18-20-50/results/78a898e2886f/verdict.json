@@ -1,0 +1,13 @@
+{
+  "status": "FALSIFIED",
+  "output": "Assertion does not hold: meta/llama-65b score (0.58) exceeds consistency bound on meta/llama-2-7b (0.42)",
+  "symbols": {
+    "threshold": 0.1,
+    "base_model": "meta/llama-2-7b",
+    "base_score": 0.4249122807017544,
+    "comp_model": "meta/llama-65b",
+    "comp_score": 0.5837192982456141,
+    "helm_runs_path": "./old-data/crfm-helm-public/lite/benchmark_output"
+  },
+  "timestamp": "2026-06-04T18:20:52.661652"
+}
