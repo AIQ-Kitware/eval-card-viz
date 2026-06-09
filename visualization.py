@@ -1,5 +1,6 @@
 import argparse
 import io
+import os
 import tempfile
 import ubelt as ub
 import json
@@ -16,6 +17,8 @@ class EvaluationCardsApp:
     def __init__(self, path, server=None):
         self.server = get_server(server, client_type="vue3")
         self.state, self.ctrl = self.server.state, self.server.controller
+        
+        self.state.is_local_deployment = "SPACE_ID" not in os.environ
 
         # Initialize dashboard state
         self.state.cards = []
@@ -435,6 +438,7 @@ class EvaluationCardsApp:
             with layout.toolbar:
                 v3.VSpacer() # Pushes the input to the far right
                 v3.VFileInput(
+                    v_if="is_local_deployment",
                     v_model=("uploaded_file", None),
                     accept=".zip",
                     label="Upload Local Run (.zip)",
