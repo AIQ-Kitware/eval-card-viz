@@ -1,6 +1,8 @@
 import argparse
+import base64
 import io
 import os
+import re
 import tempfile
 import ubelt as ub
 import json
@@ -41,7 +43,6 @@ class EvaluationCardsApp:
 
         unique_orgs = sorted(list(set(c["organization"] for c in self.state.cards)))
         unique_phases = sorted(list(set(c["milestone"] for c in self.state.cards)))
-        unique_algos = sorted(list(set(c["algorithm"] for c in self.state.cards)))
         
         # Cool colors for organizations
         org_palette = [
@@ -66,11 +67,12 @@ class EvaluationCardsApp:
         all_tags = set()
         for c in self.state.cards:
             all_tags.update(c["card"].get("tags", []))
-        all_tags.update(unique_orgs)
-        all_tags.update(unique_phases)
-        all_tags.update(unique_algos)
-        self.state.available_tags = sorted(list(all_tags))
-        self.state.selected_tags = []
+        self.state.available_tags = list(sorted(all_tags))
+        self.state.organizations = list(sorted(unique_orgs))
+        self.state.milestones = list(sorted(unique_phases))
+        self.state.selected_tags = [] 
+        self.state.selected_orgs = []
+        self.state.selected_milestones = []
 
 
         # Initialize card dependent fields
@@ -123,7 +125,7 @@ class EvaluationCardsApp:
                             continue
 
                         card_run_details = []
-
+                        figures = None
                         card = None
                         claim = None
                         verdict = "VERIFIED"
@@ -143,6 +145,15 @@ class EvaluationCardsApp:
                         else:
                             print(f"No results directory found in {card_run}")
                             continue
+
+                        if (card_run / "kwdagger").exists():
+                            figure_paths = list((card_run / "kwdagger").glob('**/*.png'))
+                            if len(figure_paths) > 0:
+                                figures = []
+                                for path in figure_paths:
+                                    with open(path, "rb") as f:
+                                        encoding = base64.b64encode(f.read()).decode("utf-8")
+                                        figures.append(f"data:image/png;base64,{encoding}")
 
                         # Parse card
                         if (card_run / "card.yaml").exists():
@@ -176,6 +187,11 @@ class EvaluationCardsApp:
                             with open((card_run / "log"), "r") as f:
                                 log_text = f.read()
 
+                        # Fix latex issues (TODO)
+                        if 'description' in card:
+                            card['description'] = re.sub(r"``([^`]*)``", r"`\1`", card["description"])
+
+
                         result_data = {
                             "milestone": milestone_dir.name,
                             "organization": organization_dir.name,
@@ -186,6 +202,7 @@ class EvaluationCardsApp:
                             "result": verdict,
                             "runs": card_run_details,
                             "log": log_text,
+                            "figures": figures,
                         }
                         result_data["id"], result_data["date"] = (
                             card_run.name.split("_")[0],
@@ -196,7 +213,7 @@ class EvaluationCardsApp:
 
         return dashboard_contents
 
-    def filter_cards(self, cards, search_term, result, selected_tags):
+    def filter_cards(self, cards, search_term, result, selected_tags, organizations, milestones):
         """
         Filter cards by search term and category
         """
@@ -216,14 +233,18 @@ class EvaluationCardsApp:
         if selected_tags and len(selected_tags) > 0:
             filtered = [
                 c for c in filtered 
-                if all(tag in c["card"].get("tags", []) or tag == c["organization"] or tag == c["milestone"] or tag == c["algorithm"] for tag in selected_tags)
+                if all(tag in c["card"].get("tags", []) for tag in selected_tags)
             ]
+        if organizations and len(organizations) > 0:
+            filtered = [c for c in filtered if c["organization"] in organizations]
+        if milestones and len(milestones) > 0: 
+            filtered = [c for c in filtered if c["milestone"] in milestones]
         return filtered
 
-    @change("search_term", "result_filter", "selected_tags")
-    def on_filter_change(self, search_term, result_filter, selected_tags, **kwargs):
+    @change("search_term", "result_filter", "selected_tags", "selected_orgs", "selected_milestones")
+    def on_filter_change(self, search_term, result_filter, selected_tags, selected_orgs, selected_milestones, **kwargs):
         self.state.filtered_cards = self.filter_cards(
-            self.state.cards, search_term, result_filter, selected_tags
+            self.state.cards, search_term, result_filter, selected_tags, selected_orgs, selected_milestones
         )
         # 2. Conditionally reset the selected card
         if self.state.selected_card:
@@ -264,6 +285,7 @@ class EvaluationCardsApp:
 
             card = None
             claim = None
+            figures = None
             verdict = "VERIFIED"
 
             # Parse results
@@ -280,6 +302,15 @@ class EvaluationCardsApp:
             else:
                 print(f"No results directory found in {card_run}")
                 continue
+
+            if (card_run / "kwdagger").exists():
+                figure_paths = list((card_run / "kwdagger").glob('**/*.png'))
+                if len(figure_paths) > 0:
+                    figures = []
+                    for path in figure_paths:
+                        with open(path, "rb") as f:
+                            encoding = base64.b64encode(f.read()).decode("utf-8")
+                            figures.append(f"data:image/png;base64,{encoding}")
 
             # Parse card
             if (card_run / "card.yaml").exists():
@@ -312,6 +343,11 @@ class EvaluationCardsApp:
                 with open((card_run / "log"), "r") as f:
                     log_text = f.read()
 
+            # Fix latex issues (TODO)
+            if 'description' in card:
+                card['description'] = re.sub(r"``([^`]*)``", r"`\1`", card["description"])
+
+
             result_data = {
                 "milestone": milestone,
                 "organization": organization,
@@ -322,6 +358,7 @@ class EvaluationCardsApp:
                 "result": verdict,
                 "runs": card_run_details,
                 "log": log_text,
+                "figures": figures,
             }
             result_data["id"], result_data["date"] = (
                 card_run.name.split("_")[0],
@@ -358,7 +395,9 @@ class EvaluationCardsApp:
                         self.state.cards, 
                         self.state.search_term, 
                         self.state.result_filter, 
-                        self.state.selected_tags
+                        self.state.selected_tags,
+                        self.state.selected_orgs,
+                        self.state.selected_milestones
                     )
                     
                     # Refresh available tags in the dropdown
@@ -368,15 +407,14 @@ class EvaluationCardsApp:
 
                     unique_orgs = set(c["organization"] for c in new_cards)
                     unique_phases = set(c["milestone"] for c in new_cards)
-                    unique_algos = set(c["algorithm"] for c in new_cards)
-                    
-                    new_tags.update(unique_orgs)
-                    new_tags.update(unique_phases)
-                    new_tags.update(unique_algos)
 
+                    unique_orgs.update(self.state.organizations)
+                    unique_phases.update(self.state.milestones)
                     new_tags.update(self.state.available_tags)
                 
                     self.state.available_tags = sorted(list(new_tags))
+                    self.state.organizations = sorted(list(unique_orgs))
+                    self.state.milestones = sorted(list(unique_phases))
                     results = set(c["result"] for c in new_cards)
                     results.update(self.state.results)
                     self.state.results = sorted(list(results))
@@ -416,6 +454,8 @@ class EvaluationCardsApp:
         self.state.search_term = ""
         self.state.result_filter = "All"
         self.state.selected_tags = []
+        self.state.selected_orgs = []
+        self.state.selected_milestones = []
 
     def add_tag_to_filter(self, tag):
             """Appends a clicked tag to the active filter list"""
@@ -425,6 +465,24 @@ class EvaluationCardsApp:
             if tag not in current_tags:
                 current_tags.append(tag)
                 self.state.selected_tags = current_tags
+
+    def add_org_to_filter(self, tag):
+            """Appends a clicked tag to the active filter list"""
+            # Ensure we have a list to work with
+            current_tags = list(self.state.selected_orgs) if self.state.selected_orgs else []
+            
+            if tag not in current_tags:
+                current_tags.append(tag)
+                self.state.selected_orgs = current_tags
+
+    def add_milestone_to_filter(self, tag):
+            """Appends a clicked tag to the active filter list"""
+            # Ensure we have a list to work with
+            current_tags = list(self.state.selected_milestones) if self.state.selected_milestones else []
+            
+            if tag not in current_tags:
+                current_tags.append(tag)
+                self.state.selected_milestones = current_tags
     def toggle_runs(self):
         self.state.runs_expanded = not self.state.runs_expanded
 
@@ -455,7 +513,7 @@ class EvaluationCardsApp:
                 with v3.VContainer(fluid=True, classes="pa-6"):
                     # Search and Filter Bar
                     with v3.VRow(classes="mb-4"):
-                        with v3.VCol(cols=12, md=6):
+                        with v3.VCol(cols=12, md=4):
                             v3.VTextField(
                                 v_model=("search_term",),
                                 label="Search cards...",
@@ -464,7 +522,7 @@ class EvaluationCardsApp:
                                 density="compact",
                                 hide_details=True,
                             )
-                        with v3.VCol(cols=12, md=4):
+                        with v3.VCol(cols=12, md=3):
                             v3.VSelect(
                                 v_model=("selected_tags",),
                                 items=("available_tags",),
@@ -477,6 +535,30 @@ class EvaluationCardsApp:
                                 hide_details=True,
                             )
                         with v3.VCol(cols=12, md=2):
+                            v3.VSelect(
+                                v_model=("selected_orgs",),
+                                items=("organizations",),
+                                label="Filter by Organization",
+                                multiple=True,  # Allows selecting multiple tags
+                                chips=True,     # Displays selected tags as nice chips inside the box
+                                clearable=True, # Adds an 'X' to clear all tags quickly
+                                variant="outlined",
+                                density="compact",
+                                hide_details=True,
+                            )
+                        with v3.VCol(cols=12, md=2):
+                            v3.VSelect(
+                                v_model=("selected_milestones",),
+                                items=("milestones",),
+                                label="Filter by Phase",
+                                multiple=True,  # Allows selecting multiple tags
+                                chips=True,     # Displays selected tags as nice chips inside the box
+                                clearable=True, # Adds an 'X' to clear all tags quickly
+                                variant="outlined",
+                                density="compact",
+                                hide_details=True,
+                            )
+                        with v3.VCol(cols=12, md=1):
                             v3.VSelect(
                                 v_model=("result_filter",),
                                 items=("results",),
@@ -598,15 +680,6 @@ class EvaluationCardsApp:
                         variant="flat",
                         click=(self.add_tag_to_filter, "[card.milestone]")
                     )
-                    # Algorithm
-                    v3.VChip(
-                        "{{ card.algorithm }}", 
-                        prepend_icon="mdi-brain", 
-                        size="small", 
-                        color="blue-grey-darken-1", 
-                        variant="flat",
-                        click=(self.add_tag_to_filter, "[card.algorithm]")
-                    )
 
                 with html.Div(classes="d-flex justify-space-between align-center"):
                     html.Span(
@@ -644,10 +717,6 @@ class EvaluationCardsApp:
                             )
 
                 # --- Full Width Content: Description, Author, Tags, Links ---
-                html.P(
-                    "{{ selected_card.card.description }}",
-                    classes="text-body-2 text-grey-darken-2 text-wrap mb-4",
-                )
                 
                 # Line 1: Author
                 with html.Div(v_if="selected_card.card.submitter && selected_card.card.submitter.name", classes="mb-3"):
@@ -734,7 +803,7 @@ class EvaluationCardsApp:
                             v3.VIcon("{{ show_python_claim ? 'mdi-text' : 'mdi-code-braces' }}", size="large")
 
                     # 1. Theory View (Markdown)
-                    with html.Div(
+                    '''with html.Div(
                         v_show="!show_python_claim", 
                         classes="text-body-1 text-grey-darken-3", 
                         # Force extreme word-breaking so nothing spills out of the container
@@ -742,8 +811,20 @@ class EvaluationCardsApp:
                     ):
                         # Use property binding (tuple) instead of mustache syntax so Vue handles the reactivity
                         # Note: Depending on your specific trame-markdown version, the prop is usually 'content' or 'source'
-                        markdown.Markdown(content=("selected_card.card.description",))
-
+                        markdown.Markdown(content=("selected_card.card.description",))'''
+                    with html.Div(
+                        v_show="!show_python_claim",
+                        classes="text-body-1 pa-4",
+                        style="""
+                            border-left: 4px solid rgb(var(--v-theme-primary));
+                            background-color: rgba(var(--v-theme-primary), 0.04);
+                            border-radius: 4px;
+                        """,
+                    ):
+                        markdown.Markdown(
+                            content=("selected_card.card.description",)
+                        )
+                        
                     # 2. Python Code View
                     with html.Div(v_show="show_python_claim"):
                         v3.VDivider(classes="mb-4", color="primary")
@@ -770,7 +851,11 @@ class EvaluationCardsApp:
             # --- INVESTIGATION WORKSPACE: TABS ---
             with v3.VTabs(v_model=("current_tab",), color="primary", bg_color="grey-lighten-4"):
                 v3.VTab(value="runs", text="Sweep Runs", classes="text-none font-weight-bold")
+                v3.VTab(v_if="selected_card.card", value="card", text="Card", classes="text-none font-weight-bold")
+                v3.VTab(v_if="selected_card.figures", value="figures", text="Figures", classes="text-none font-weight-bold")
                 v3.VTab(value="logs", text="Execution Logs", classes="text-none font-weight-bold")
+                
+                #v3.VTab(v_if="selected_card.has_artifacts", value="artifacts", text="Execution Logs", classes="text-none font-weight-bold")
             
             v3.VDivider()
 
@@ -922,7 +1007,58 @@ class EvaluationCardsApp:
                                                 with html.Div(v_if="values !== undefined", classes="text-body-2 mt-1"):
                                                     html.Span("Value: ", classes="font-weight-bold text-grey-darken-2")
                                                     html.Span("{{ values }}", classes="font-family-monospace")
+                with v3.VWindowItem(value="card"):
+                    with v3.VCardText(classes="pa-6"):
+                        with html.Div(classes="d-flex align-center mb-4"):
+                            v3.VIcon("mdi-file-document-outline", classes="mr-2 text-primary")
+                            html.H3("Evaluation Card", classes="text-h6")
+
+                        with v3.VCard(
+                            variant="outlined",
+                            rounded=True,
+                            classes="pa-0",
+                            style="max-height: 600px; overflow: hidden;",
+                        ):
+                            html.Pre(
+                                "{{ selected_card.card }}",
+                                classes="ma-0 pa-4 text-body-2",
+                                style="""
+                                    font-family: 'Fira Code', 'JetBrains Mono', monospace;
+                                    overflow-x: auto;
+                                    overflow-y: auto;
+                                    max-height: 600px;
+                                    background-color: #fafafa;
+                                    line-height: 1.6;
+                                    white-space: pre;
+                                    color: #2c3e50;
+                                """,
+                            )
                 # TAB B: Logs Section
+                with v3.VWindowItem(value="figures"):
+                    with v3.VContainer(fluid=True):
+
+                        with html.Div(classes="d-flex align-center mb-4"):
+                            v3.VIcon("mdi-chart-box-outline", classes="mr-2")
+                            html.H3("Figures", classes="text-h6")
+
+                        with v3.VRow():
+                            with v3.VCol(
+                                v_for="figure in selected_card.figures",
+                                cols=12,
+                                md=6,
+                            ):
+                                with v3.VCard(
+                                    variant="outlined",
+                                    rounded="lg",
+                                    classes="mb-4",
+                                ):
+                                    #v3.VCardTitle("{{ figure.title }}")
+
+                                    v3.VImg(
+                                        v_bind_src="figure",
+                                        contain=True,
+                                        height="400px",
+                                    )
                 with v3.VWindowItem(value="logs"):
                     with v3.VCardText(classes="pa-6"):
                         with html.Div(classes="d-flex align-center mb-4"):
@@ -941,6 +1077,7 @@ class EvaluationCardsApp:
                                 classes="text-body-2 mb-0",
                                 style="font-family: 'Fira Code', 'Courier New', monospace; color: #a9b7c6; white-space: pre-wrap; word-break: break-all;"
                             )
+
 
     def start(self, **kwargs):
         """Start the Trame server"""
